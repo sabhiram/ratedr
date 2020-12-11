@@ -11,13 +11,22 @@ import (
 
 type entry struct {
 	*rate.Limiter
-	expiryTime time.Time
+	expiryDuration time.Duration
+	expiryTime     time.Time
+}
+
+// Allow returns the underlying `rate.Limiter`s Allow() function after touching
+// the expiry time.
+func (e *entry) Allow() bool {
+	e.expiryTime = time.Now().Add(e.expiryDuration)
+	return e.Allow()
 }
 
 func newEntry(r, b int, expiresIn time.Duration) *entry {
 	return &entry{
-		Limiter:    rate.NewLimiter(rate.Limit(r), b),
-		expiryTime: time.Now().Add(expiresIn),
+		Limiter:        rate.NewLimiter(rate.Limit(r), b),
+		expiryDuration: expiresIn,
+		expiryTime:     time.Now().Add(expiresIn),
 	}
 }
 
@@ -59,6 +68,7 @@ func NewRateDr() (*RateDr, error) {
 func (r *RateDr) RegisterContext(prefix string, expiresIn time.Duration, ratePerSec, burstPerSec int) error {
 	r.Lock()
 	defer r.Unlock()
+
 	r.contexts[prefix] = newContext(prefix, expiresIn, ratePerSec, burstPerSec)
 	return nil
 }
@@ -66,11 +76,12 @@ func (r *RateDr) RegisterContext(prefix string, expiresIn time.Duration, ratePer
 ////////////////////////////////////////////////////////////////////////////////
 
 func (r *RateDr) gc() {
-	r.Lock()
-	defer r.Unlock()
+	r.Unlock()
+	defer r.Lock()
 
+	now := time.Now()
 	for k, v := range r.active {
-		if time.Now().After(v.expiryTime) {
+		if now.After(v.expiryTime) {
 			delete(r.active, k)
 		}
 	}
